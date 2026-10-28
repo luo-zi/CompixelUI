@@ -23,6 +23,8 @@ class OpenGlFrameRenderer(
     private val measureGpu: Boolean = false,
     private val profiler: UiFrameProfiler? = null,
     private val contextIdentity: () -> Any = { GL.getCapabilities() },
+    /** Skia's GPU context and the compositor program, shared with the pages that follow on this GL context. */
+    private val shared: SharedGlResources? = null,
 ) : FrameRenderer<OpenGlDestination> {
     private val owner = Thread.currentThread()
     private val glContext = contextIdentity()
@@ -74,6 +76,7 @@ class OpenGlFrameRenderer(
 
     init {
         check(capabilities.OpenGL32) { "OpenGL 3.2 is required by this backend" }
+        shared?.attach(glContext)
     }
 
     private val scopes = GlScopeStates(capabilities)
@@ -215,6 +218,9 @@ class OpenGlFrameRenderer(
         }
 
     private fun directContext(): DirectContext {
+        shared?.let {
+            return it.directContext()
+        }
         context?.let {
             return it
         }
@@ -272,7 +278,7 @@ class OpenGlFrameRenderer(
     }
 
     private fun composite(destination: OpenGlDestination) {
-        if (compositor == 0) compositor = createCompositor()
+        val program = compositorProgram()
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination.framebuffer)
         glViewport(0, 0, destination.width, destination.height)
         glDisable(GL_DEPTH_TEST)
@@ -292,11 +298,20 @@ class OpenGlFrameRenderer(
         glEnablei(GL_BLEND, 0)
         glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD)
         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
-        glUseProgram(compositor)
+        glUseProgram(program)
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, texture)
         if (samplerObjects) glBindSampler(0, 0)
         glDrawArrays(GL_TRIANGLES, 0, 3)
+    }
+
+    // Compiled once per GL context: shared with the pages that follow, otherwise with this renderer.
+    private fun compositorProgram(): Int {
+        shared?.let {
+            return it.compositorProgram(::createCompositor)
+        }
+        if (compositor == 0) compositor = createCompositor()
+        return compositor
     }
 
     override fun reset() = isolated(scopes.skia) { releaseSurface() }
@@ -387,6 +402,8 @@ class OpenGlFrameRenderer(
             presentTimer?.close()
             nativeTimers.values.forEach { it.close() }
             nativeTimers.clear()
+            // The shared context and program stay for the pages that follow this one.
+            shared?.detach()
         }
         closed = true
         if (stateCheck != null) {

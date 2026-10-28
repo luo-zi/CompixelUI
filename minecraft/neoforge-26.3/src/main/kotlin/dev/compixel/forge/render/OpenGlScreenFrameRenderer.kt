@@ -10,10 +10,17 @@ import com.mojang.renderpearl.api.textures.GpuTextureView
 import com.mojang.renderpearl.backend.opengl.GlTexture
 import dev.compixel.render.*
 import dev.compixel.render.gl.OpenGlFrameRenderer
+import dev.compixel.render.gl.SharedGlResources
 import org.jetbrains.skia.Image
 
+/**
+ * Skia's GPU context and the compositor program, kept for the pages that draw after each other: making both costs a
+ * noticeable part of a page's first frame. It lives with the game's GL context, which is the render thread's.
+ */
+private val sharedGlResources = SharedGlResources()
+
 internal class OpenGlScreenFrameRenderer(override val profiler: UiFrameProfiler?) : ScreenFrameRenderer {
-    private val renderer = OpenGlFrameRenderer(profiler = profiler)
+    private val renderer = OpenGlFrameRenderer(profiler = profiler, shared = sharedGlResources)
     private var texture: GpuTexture? = null
     private var view: GpuTextureView? = null
     private var sampler: GpuSampler? = null

@@ -40,7 +40,11 @@ internal fun createScreenRenderer(backend: RenderBackend, profiler: UiFrameProfi
 /** Keeps GL destination handles inside the version adapter and the GL backend. */
 private class GlScreenFrameRenderer(override val profiler: UiFrameProfiler?) : ScreenFrameRenderer {
     private val renderer =
-        OpenGlFrameRenderer(measureGpu = java.lang.Boolean.getBoolean("compixel.diagnostics"), profiler = profiler)
+        OpenGlFrameRenderer(
+            measureGpu = java.lang.Boolean.getBoolean("compixel.diagnostics"),
+            profiler = profiler,
+            shared = sharedGlResources,
+        )
 
     override fun <T> nativeGpu(phase: GpuPhase, action: () -> T): T = renderer.profileGpu(phase, action)
 
