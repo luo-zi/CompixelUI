@@ -27,18 +27,19 @@ class UiSession(
         ArrayDeque<Runnable>().also {
             require(commandCapacity in 1..65_536 && commandsPerFrame in 1..commandCapacity)
         }
-    private val bridge = ComposeThread.call { SceneBridge(viewport, clipboard) }
-    var state: SessionState = SessionState.ACTIVE
-        private set
-
-    init {
+    // One round trip to the Compose thread: the game thread waits in one place, not twice.
+    private val bridge = ComposeThread.call {
+        val created = SceneBridge(viewport, clipboard)
         try {
-            ComposeThread.call { bridge.setContent(content) }
+            created.setContent(content)
+            created
         } catch (error: Throwable) {
-            ComposeThread.call { bridge.close() }
+            created.close()
             throw error
         }
     }
+    var state: SessionState = SessionState.ACTIVE
+        private set
 
     private fun checkOwner() = check(Thread.currentThread() === owner) { "Session must be used on its owning thread" }
 
@@ -59,6 +60,18 @@ class UiSession(
 
     val pendingCommands: Int
         get() = synchronized(commands) { commands.size }
+
+    /**
+     * Composes and lays the content out without recording it, so a host can read its layout geometry before it draws
+     * anything beneath Compose. The frame that shows that layout is recorded later, by [frame]; recording one here
+     * would only be thrown away, at the cost of a whole-scene draw.
+     */
+    fun layout(timeNanos: Long = System.nanoTime()) {
+        checkOpen()
+        // An idle scene has nothing to lay out, and asking the Compose thread costs two thread wake-ups.
+        if (bridge.idle) return
+        ComposeThread.call { bridge.layout(timeNanos) }
+    }
 
     fun frame(timeNanos: Long = System.nanoTime()): RecordedFrame? {
         checkOpen()

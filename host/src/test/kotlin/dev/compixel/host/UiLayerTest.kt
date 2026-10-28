@@ -130,6 +130,8 @@ class UiLayerTest {
         private val failItemsClose: Boolean = false,
         closeHost: () -> Unit = {},
         openColorEditor: (() -> Unit)? = null,
+        /** A container's handoff from the content's layout to its snapshot; null on a screen without one. */
+        private val handoff: (() -> Boolean)? = null,
         content: @Composable () -> Unit = {},
     ) :
         UiLayer<Unit, String>(
@@ -138,7 +140,7 @@ class UiLayerTest {
             minimumUiDensity = 0f,
             design = design,
             windowFocused = { true },
-            prepareFrameContent = { false },
+            prepareFrameContent = handoff,
             contentState = contentState,
             closeHost = closeHost,
             openColorEditor = openColorEditor,
@@ -242,6 +244,39 @@ class UiLayerTest {
         assertEquals(2, layer.items.generations.size)
         assertTrue(layer.items.generations[1] > layer.items.generations[0])
         assertEquals(layer.items.generations, layer.tooltips.generations)
+        layer.close()
+    }
+
+    @Test
+    fun `laying the content out while initializing records no frame`() {
+        val layer = TestLayer(state())
+        layer.open(200, 100)
+        // A container lays its content out during initialization, before it draws anything.
+        layer.layout()
+        assertTrue(layer.items.generations.isEmpty(), "Layout recorded a frame the first presented frame replaces")
+        layer.prepare(Unit, 200, 100)
+        assertEquals(1, layer.items.generations.size, "The first presented frame was recorded more than once")
+        assertEquals(1, layer.renderer.rendered)
+        layer.close()
+    }
+
+    @Test
+    fun `a container's slot handoff records the frame once instead of replacing it`() {
+        var handoffs = 0
+        val layer =
+            TestLayer(
+                state(),
+                handoff = {
+                    handoffs++
+                    true
+                },
+            )
+        layer.open(200, 100)
+        layer.prepare(Unit, 200, 100)
+        assertEquals(1, handoffs)
+        // What the handoff published shows in the frame recorded after it, not in one recorded before and dropped.
+        assertEquals(1, layer.items.generations.size, "The handoff replaced an already recorded frame")
+        assertEquals(1, layer.renderer.rendered)
         layer.close()
     }
 

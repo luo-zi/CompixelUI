@@ -187,25 +187,30 @@ class SceneBridge(viewport: Viewport, clipboard: ClipboardPort) : AutoCloseable 
             else -1
     }
 
-    fun recordFrame(timeNanos: Long): RecordedFrame? {
+    /**
+     * Applies the composition and layout a frame would, without recording it, for a host that reads the layout before
+     * it draws anything beneath Compose; [recordFrame] then records that layout. False when nothing was pending, so the
+     * view did not change. A recorded picture costs a whole-scene draw, so a frame that a later one would replace is
+     * better not recorded at all.
+     */
+    fun layout(timeNanos: Long): Boolean {
         checkOpen()
         require(timeNanos >= lastFrameTime) { "Frame clock must be monotonic" }
         lastFrameTime = timeNanos
-        if (
-            !dirty.getAndSet(false) &&
-                !recomposer.hasPendingWork() &&
-                !scene.hasPendingMeasureOrLayout &&
-                !scene.hasPendingDraw
-        ) {
-            settle()
-            return null
-        }
+        if (!dirty.getAndSet(false) && !recomposer.hasPendingWork() && !scene.hasPendingMeasureOrLayout) return false
         settledAt = -1
+        applyLayout(timeNanos)
+        // Laying out is not drawing: the frame that shows this layout is still to be recorded.
+        dirty.set(true)
+        return true
+    }
+
+    // The content was composed outside a frame. Lay it out before its first frame callbacks: transitions register
+    // their animations during layout, and one that sees none in its first frame ends at once, as an entering
+    // AnimatedVisibility would.
+    private fun applyLayout(timeNanos: Long) {
         if (settleLayout) {
             settleLayout = false
-            // The content was composed outside a frame. Lay it out before its first frame callbacks: transitions
-            // register their animations during layout, and one that sees none in its first frame ends at once, as an
-            // entering AnimatedVisibility would.
             scene.measureAndLayout()
             // Size/placement callbacks may feed state back into composition. Resolve that
             // startup work before exposing a picture, using the same animation timestamp.
@@ -221,6 +226,23 @@ class SceneBridge(viewport: Viewport, clipboard: ClipboardPort) : AutoCloseable 
             recomposer.performFrame(timeNanos)
             scene.measureAndLayout()
         }
+    }
+
+    fun recordFrame(timeNanos: Long): RecordedFrame? {
+        checkOpen()
+        require(timeNanos >= lastFrameTime) { "Frame clock must be monotonic" }
+        lastFrameTime = timeNanos
+        if (
+            !dirty.getAndSet(false) &&
+                !recomposer.hasPendingWork() &&
+                !scene.hasPendingMeasureOrLayout &&
+                !scene.hasPendingDraw
+        ) {
+            settle()
+            return null
+        }
+        settledAt = -1
+        applyLayout(timeNanos)
         // State applied by this frame invalidated drawing while it recomposed and laid out; the drawing below includes
         // those changes. Work still pending afterwards shows in hasPendingWork() and the scene's pending flags.
         dirty.set(false)

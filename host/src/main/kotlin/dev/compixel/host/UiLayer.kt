@@ -68,8 +68,8 @@ abstract class UiLayer<G, D>(
     private val minimumUiDensity: Float,
     private val design: UiDesign,
     private val windowFocused: () -> Boolean,
-    /** The platform's layout-to-snapshot handoff, on the game thread before presentation. */
-    private val prepareFrameContent: () -> Boolean,
+    /** The platform's layout-to-snapshot handoff, on the game thread before presentation; null without one. */
+    private val prepareFrameContent: (() -> Boolean)?,
     /** The content's game state, opened before each session composes and closed with it. */
     private val contentState: UiStateBinding<*, *>,
     /** Closes the host, as its own close action does, when the content asked for it through [requestClose]. */
@@ -296,11 +296,13 @@ abstract class UiLayer<G, D>(
         beforeClose()
     }
 
-    /** Lays the content out ahead of the first frame, so the host can read layout geometry while it initializes. */
+    /**
+     * Lays the content out ahead of the first frame, so the host can read layout geometry while it initializes. This
+     * composes and measures without recording: the frame that shows this layout is the one [prepare] records, so
+     * recording it here would cost a whole-scene draw that the next frame replaces.
+     */
     fun layout() {
-        val active = session ?: return
-        active.frame(clock.next())?.close()
-        active.invalidate() // The first presented frame records again.
+        session?.layout(clock.next())
     }
 
     /**
@@ -370,6 +372,7 @@ abstract class UiLayer<G, D>(
                 if (backend.needsFrame) active.invalidate()
                 current
             }
+        var frame: RecordedFrame? = null
         fun recordFrame(): RecordedFrame? =
             active.frame(clock.next())?.also {
                 frameProfiler?.recorded(it.generation)
@@ -377,7 +380,6 @@ abstract class UiLayer<G, D>(
                 surface.tooltips.recorded(it.generation)
                 surface.drawings.recorded(it.generation)
             }
-        var frame = frameProfiler.measureCpu(CpuPhase.RECORD) { recordFrame() }
         fun replaceFrame() {
             frameProfiler.measureCpu(CpuPhase.FRAME_RELEASE) { frame?.close() }
             frame = null
@@ -388,9 +390,16 @@ abstract class UiLayer<G, D>(
                 }
         }
         try {
-            // A container first learns its visible slots during layout. Publish their values
-            // before image preparation and presentation, including newly scrolled-in slots.
-            if (frameProfiler.measureCpu(CpuPhase.HOST) { prepareFrameContent() }) replaceFrame()
+            // A container first learns its visible slots during layout, and publishes their values for the frame that
+            // draws them. Lay the content out first, so the frame recorded below already shows them: a frame recorded
+            // before the handoff would be replaced by one recorded after it, doubling the first frame's work.
+            prepareFrameContent?.let { handoff ->
+                frameProfiler.measureCpu(CpuPhase.HOST) {
+                    active.layout(clock.next())
+                    handoff()
+                }
+            }
+            frame = frameProfiler.measureCpu(CpuPhase.RECORD) { recordFrame() }
             val itemsChanged =
                 frameProfiler.measureCpu(CpuPhase.ITEMS) { surface.items.prepare(System.nanoTime(), current) }
             val tooltipChanged =
@@ -401,6 +410,8 @@ abstract class UiLayer<G, D>(
                 frameProfiler.measureCpu(CpuPhase.ITEMS) {
                     surface.drawings.prepare(System.nanoTime(), current)
                 }
+            // Native images are drawn into the frame after it was recorded, so the one bounded replacement frame
+            // below is what shows them.
             if (itemsChanged || tooltipChanged || drawingsChanged) replaceFrame()
         } catch (error: Throwable) {
             frame?.close()

@@ -59,8 +59,11 @@ internal class ComposeLayer(
     design: UiDesign = OreDesign(),
     private val nativeDrawingOptions: NativeDrawingOptions = NativeDrawingOptions(),
     windowFocused: () -> Boolean,
-    /** Adapter-owned layout-to-snapshot handoff, on the game thread before presentation. */
-    prepareFrameContent: () -> Boolean = { false },
+    /**
+     * Adapter-owned layout-to-snapshot handoff, on the game thread before presentation; null where nothing hands the
+     * content's layout to the game, as on a screen that reads no slot geometry.
+     */
+    prepareFrameContent: (() -> Boolean)? = null,
     /** The content's game state, opened before each session composes and closed with it. */
     contentState: UiStateBinding<*, *>,
     /** Closes the host when its content asks to. */
